@@ -2,5 +2,5 @@ streamlit
 sentence-transformers
 transformers
 torch
-PyPDF2
+pypdf
 numpy
