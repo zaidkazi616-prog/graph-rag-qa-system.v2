@@ -14,7 +14,6 @@ st.caption("Powered by Graph RAG (Retrieval Augmented Generation) with PDF suppo
 @st.cache_resource
 def load_models():
     embedder = SentenceTransformer('all-MiniLM-L6-v2')
-    # Using a generative model that writes real answers
     tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
     model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
     return embedder, tokenizer, model
@@ -37,10 +36,25 @@ def process_documents(doc_dict):
     chunks = []
     chunk_id = 0
     for doc_name, text in doc_dict.items():
-        sentences = text.replace("\n", " ").strip().split(". ")
-        for sentence in sentences:
-            if len(sentence) > 15:
-                chunks.append({"id": chunk_id, "text": sentence, "source": doc_name})
+        # Splitting by newlines first, then by sentences to create larger, meaningful chunks
+        paragraphs = text.split("\n\n")
+        for para in paragraphs:
+            sentences = para.replace("\n", " ").strip().split(". ")
+            current_chunk = ""
+            for sentence in sentences:
+                if len(sentence) > 15:
+                    # Group 3 sentences together into one chunk
+                    if len(current_chunk) == 0:
+                        current_chunk = sentence
+                    else:
+                        current_chunk += ". " + sentence
+                    
+                    if current_chunk.count(". ") >= 2: # If chunk has 3 sentences
+                        chunks.append({"id": chunk_id, "text": current_chunk, "source": doc_name})
+                        chunk_id += 1
+                        current_chunk = ""
+            if len(current_chunk) > 15: # Add remaining text
+                chunks.append({"id": chunk_id, "text": current_chunk, "source": doc_name})
                 chunk_id += 1
     return chunks
 
@@ -51,7 +65,8 @@ def build_graph(chunks):
             words_i = set(chunks[i]["text"].lower().split())
             words_j = set(chunks[j]["text"].lower().split())
             common_words = words_i.intersection(words_j)
-            if len(common_words) >= 3:
+            # Increased to 4 common words to ensure chunks are highly related
+            if len(common_words) >= 4:
                 graph[i].append(j)
                 graph[j].append(i)
     return graph
@@ -117,13 +132,16 @@ else:
             similarities = np.dot(st.session_state.embeddings, q_embedding)
             best_chunk_id = np.argmax(similarities)
             
-            # Step B: Graph Traversal
+            # Step B: Graph Traversal (Limiting to top 3 neighbors to avoid noise)
             context_chunks = [st.session_state.chunks[best_chunk_id]["text"]]
             sources_used = [st.session_state.chunks[best_chunk_id]["source"]]
             
+            neighbor_count = 0
             for neighbor_id in st.session_state.graph[best_chunk_id]:
-                context_chunks.append(st.session_state.chunks[neighbor_id]["text"])
-                sources_used.append(st.session_state.chunks[neighbor_id]["source"])
+                if neighbor_count < 3:
+                    context_chunks.append(st.session_state.chunks[neighbor_id]["text"])
+                    sources_used.append(st.session_state.chunks[neighbor_id]["source"])
+                    neighbor_count += 1
             
             final_context = " ".join(context_chunks)
             
