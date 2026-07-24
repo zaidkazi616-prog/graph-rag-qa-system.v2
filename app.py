@@ -75,18 +75,13 @@ if 'graph' not in st.session_state:
 if 'system_ready' not in st.session_state:
     st.session_state.system_ready = False
 
-# --- SIDEBAR: API KEY & PDF UPLOAD ---
+# --- SIDEBAR: PDF UPLOAD ---
 with st.sidebar:
-    st.header("Configuration")
-    api_key = st.text_input("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, type="password")
-    
     st.header("Knowledge Base")
     uploaded_file = st.file_uploader("Upload your PDF document", type="pdf")
     
     if st.button("Build Graph RAG System"):
-        if not api_key:
-            st.error("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")
-        elif uploaded_file is not None:
+        if uploaded_file is not None:
             with st.spinner("Extracting text and building knowledge graph..."):
                 embedder = load_models()
                 raw_text = extract_text_from_pdf(uploaded_file)
@@ -108,7 +103,6 @@ with st.sidebar:
                         st.session_state.embeddings = new_embeddings
                         st.session_state.graph = new_graph
                         st.session_state.embedder = embedder
-                        st.session_state.api_key = api_key
                         st.session_state.system_ready = True
                         
                         st.success(f"Successfully processed {uploaded_file.name}! You can now ask questions.")
@@ -117,7 +111,7 @@ with st.sidebar:
 
 # --- MAIN APP LOGIC ---
 if not st.session_state.system_ready:
-    st.info("Please enter your Groq API Key and upload a PDF in the sidebar to begin.")
+    st.info("Please upload a PDF in the sidebar to begin.")
 else:
     st.success("System is ready. Ask a question based on your uploaded document.")
     
@@ -143,9 +137,10 @@ else:
             
             final_context = " ".join(context_chunks)
             
-            # Step C: Generate Answer using Groq (Llama 3)
+            # Step C: Generate Answer using Groq (Llama 3) via Streamlit Secrets
             try:
-                client = Groq(api_key=st.session_state.api_key)
+                # This reads the key from the hidden Streamlit vault
+                client = Groq(api_key=st.secrets["GROQ_API_KEY"])
                 
                 prompt = f"Context: {final_context}\n\nQuestion: {question}\n\nAnswer the question based strictly on the context provided. If the answer is not in the context, say 'I cannot find the answer in the document.'"
                 
