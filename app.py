@@ -2,7 +2,7 @@ import streamlit as st
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForQuestionAnswering
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import pdfplumber
 
 # --- PAGE CONFIGURATION ---
@@ -14,15 +14,15 @@ st.caption("Powered by Graph RAG (Retrieval Augmented Generation) with PDF suppo
 @st.cache_resource
 def load_models():
     embedder = SentenceTransformer('all-MiniLM-L6-v2')
-    qa_tokenizer = AutoTokenizer.from_pretrained("distilbert-base-cased-distilled-squad")
-    qa_model = AutoModelForQuestionAnswering.from_pretrained("distilbert-base-cased-distilled-squad")
-    return embedder, qa_tokenizer, qa_model
+    # Using a generative model that writes real answers
+    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
+    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
+    return embedder, tokenizer, model
 
 # --- HELPER FUNCTIONS ---
 def extract_text_from_pdf(pdf_file):
     try:
         text = ""
-        # Using pdfplumber which is much more robust than pypdf
         with pdfplumber.open(pdf_file) as pdf:
             for page in pdf.pages:
                 extracted = page.extract_text()
@@ -39,7 +39,7 @@ def process_documents(doc_dict):
     for doc_name, text in doc_dict.items():
         sentences = text.replace("\n", " ").strip().split(". ")
         for sentence in sentences:
-            if len(sentence) > 15: # Filter out tiny fragments
+            if len(sentence) > 15:
                 chunks.append({"id": chunk_id, "text": sentence, "source": doc_name})
                 chunk_id += 1
     return chunks
@@ -51,7 +51,6 @@ def build_graph(chunks):
             words_i = set(chunks[i]["text"].lower().split())
             words_j = set(chunks[j]["text"].lower().split())
             common_words = words_i.intersection(words_j)
-            # Connect chunks if they share at least 3 common words
             if len(common_words) >= 3:
                 graph[i].append(j)
                 graph[j].append(i)
@@ -75,17 +74,12 @@ with st.sidebar:
     if st.button("Build Graph RAG System"):
         if uploaded_file is not None:
             with st.spinner("Extracting text and building knowledge graph..."):
-                # Load models
-                embedder, qa_tokenizer, qa_model = load_models()
-                
-                # Extract text from PDF
+                embedder, tokenizer, model = load_models()
                 raw_text = extract_text_from_pdf(uploaded_file)
                 
-                # Check if extraction failed
                 if raw_text is None or len(raw_text.strip()) == 0:
                     st.error("Could not extract text from this PDF. It might be an image-based PDF without text layers.")
                 else:
-                    # Process into chunks and build graph
                     doc_dict = {uploaded_file.name: raw_text}
                     new_chunks = process_documents(doc_dict)
                     
@@ -96,13 +90,12 @@ with st.sidebar:
                         new_embeddings = embedder.encode(texts)
                         new_graph = build_graph(new_chunks)
                         
-                        # Save to session state
                         st.session_state.chunks = new_chunks
                         st.session_state.embeddings = new_embeddings
                         st.session_state.graph = new_graph
                         st.session_state.embedder = embedder
-                        st.session_state.qa_tokenizer = qa_tokenizer
-                        st.session_state.qa_model = qa_model
+                        st.session_state.tokenizer = tokenizer
+                        st.session_state.model = model
                         st.session_state.system_ready = True
                         
                         st.success(f"Successfully processed {uploaded_file.name}! You can now ask questions.")
@@ -134,14 +127,14 @@ else:
             
             final_context = " ".join(context_chunks)
             
-            # Step C: Generate Answer
-            inputs = st.session_state.qa_tokenizer(question, final_context, return_tensors="pt", truncation=True, max_length=512)
+            # Step C: Generate Answer using Flan-T5
+            prompt = f"Context: {final_context}\nQuestion: {question}\nAnswer:"
+            inputs = st.session_state.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+            
             with torch.no_grad():
-                outputs = st.session_state.qa_model(**inputs)
+                outputs = st.session_state.model.generate(**inputs, max_new_tokens=50)
                 
-            answer_start = outputs.start_logits.argmax()
-            answer_end = outputs.end_logits.argmax() + 1
-            answer = st.session_state.qa_tokenizer.decode(inputs.input_ids[0, answer_start:answer_end])
+            answer = st.session_state.tokenizer.decode(outputs[0], skip_special_tokens=True)
             
             # Display Results
             st.markdown("### Answer:")
