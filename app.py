@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForQuestionAnswering
-from pypdf import PdfReader
+import pdfplumber
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Graph RAG QA", layout="centered")
@@ -21,12 +21,13 @@ def load_models():
 # --- HELPER FUNCTIONS ---
 def extract_text_from_pdf(pdf_file):
     try:
-        pdf_reader = PdfReader(pdf_file)
         text = ""
-        for page in pdf_reader.pages:
-            extracted = page.extract_text()
-            if extracted:
-                text += extracted + " "
+        # Using pdfplumber which is much more robust than pypdf
+        with pdfplumber.open(pdf_file) as pdf:
+            for page in pdf.pages:
+                extracted = page.extract_text()
+                if extracted:
+                    text += extracted + " "
         return text
     except Exception as e:
         st.error(f"Error reading PDF: {e}. The file might be corrupted or scanned as an image.")
@@ -51,14 +52,12 @@ def build_graph(chunks):
             words_j = set(chunks[j]["text"].lower().split())
             common_words = words_i.intersection(words_j)
             # Connect chunks if they share at least 3 common words
-            # Increased from 2 to 3 to make graph connections more meaningful
             if len(common_words) >= 3:
                 graph[i].append(j)
                 graph[j].append(i)
     return graph
 
 # --- SESSION STATE ---
-# We use session state to store user-uploaded data so it persists across interactions
 if 'chunks' not in st.session_state:
     st.session_state.chunks = []
 if 'embeddings' not in st.session_state:
