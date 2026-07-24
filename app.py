@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForQuestionAnswering
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Graph RAG QA", layout="centered")
@@ -20,13 +20,17 @@ def load_models():
 
 # --- HELPER FUNCTIONS ---
 def extract_text_from_pdf(pdf_file):
-    pdf_reader = PdfReader(pdf_file)
-    text = ""
-    for page in pdf_reader.pages:
-        extracted = page.extract_text()
-        if extracted:
-            text += extracted + " "
-    return text
+    try:
+        pdf_reader = PdfReader(pdf_file)
+        text = ""
+        for page in pdf_reader.pages:
+            extracted = page.extract_text()
+            if extracted:
+                text += extracted + " "
+        return text
+    except Exception as e:
+        st.error(f"Error reading PDF: {e}. The file might be corrupted or scanned as an image.")
+        return None
 
 def process_documents(doc_dict):
     chunks = []
@@ -78,27 +82,31 @@ with st.sidebar:
                 # Extract text from PDF
                 raw_text = extract_text_from_pdf(uploaded_file)
                 
-                # Process into chunks and build graph
-                doc_dict = {uploaded_file.name: raw_text}
-                new_chunks = process_documents(doc_dict)
-                
-                if len(new_chunks) == 0:
-                    st.error("Could not extract enough text from this PDF. Please try another file.")
+                # Check if extraction failed
+                if raw_text is None or len(raw_text.strip()) == 0:
+                    st.error("Could not extract text from this PDF. It might be an image-based PDF without text layers.")
                 else:
-                    texts = [c["text"] for c in new_chunks]
-                    new_embeddings = embedder.encode(texts)
-                    new_graph = build_graph(new_chunks)
+                    # Process into chunks and build graph
+                    doc_dict = {uploaded_file.name: raw_text}
+                    new_chunks = process_documents(doc_dict)
                     
-                    # Save to session state
-                    st.session_state.chunks = new_chunks
-                    st.session_state.embeddings = new_embeddings
-                    st.session_state.graph = new_graph
-                    st.session_state.embedder = embedder
-                    st.session_state.qa_tokenizer = qa_tokenizer
-                    st.session_state.qa_model = qa_model
-                    st.session_state.system_ready = True
-                    
-                    st.success(f"Successfully processed {uploaded_file.name}! You can now ask questions.")
+                    if len(new_chunks) == 0:
+                        st.error("Could not extract enough text from this PDF. Please try another file.")
+                    else:
+                        texts = [c["text"] for c in new_chunks]
+                        new_embeddings = embedder.encode(texts)
+                        new_graph = build_graph(new_chunks)
+                        
+                        # Save to session state
+                        st.session_state.chunks = new_chunks
+                        st.session_state.embeddings = new_embeddings
+                        st.session_state.graph = new_graph
+                        st.session_state.embedder = embedder
+                        st.session_state.qa_tokenizer = qa_tokenizer
+                        st.session_state.qa_model = qa_model
+                        st.session_state.system_ready = True
+                        
+                        st.success(f"Successfully processed {uploaded_file.name}! You can now ask questions.")
         else:
             st.warning("Please upload a PDF file first.")
 
