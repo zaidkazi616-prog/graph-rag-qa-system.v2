@@ -1,22 +1,19 @@
 import streamlit as st
 import numpy as np
-import torch
 from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from groq import Groq
 import pdfplumber
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Graph RAG QA", layout="centered")
 st.title("Multi-Document QA System")
-st.caption("Powered by Graph RAG (Retrieval Augmented Generation) with PDF support")
+st.caption("Powered by Graph RAG (Retrieval Augmented Generation) with Llama 3")
 
 # --- LOAD MODELS ---
 @st.cache_resource
 def load_models():
     embedder = SentenceTransformer('all-MiniLM-L6-v2')
-    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
-    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
-    return embedder, tokenizer, model
+    return embedder
 
 # --- HELPER FUNCTIONS ---
 def extract_text_from_pdf(pdf_file):
@@ -36,24 +33,22 @@ def process_documents(doc_dict):
     chunks = []
     chunk_id = 0
     for doc_name, text in doc_dict.items():
-        # Splitting by newlines first, then by sentences to create larger, meaningful chunks
         paragraphs = text.split("\n\n")
         for para in paragraphs:
             sentences = para.replace("\n", " ").strip().split(". ")
             current_chunk = ""
             for sentence in sentences:
                 if len(sentence) > 15:
-                    # Group 3 sentences together into one chunk
                     if len(current_chunk) == 0:
                         current_chunk = sentence
                     else:
                         current_chunk += ". " + sentence
                     
-                    if current_chunk.count(". ") >= 2: # If chunk has 3 sentences
+                    if current_chunk.count(". ") >= 2:
                         chunks.append({"id": chunk_id, "text": current_chunk, "source": doc_name})
                         chunk_id += 1
                         current_chunk = ""
-            if len(current_chunk) > 15: # Add remaining text
+            if len(current_chunk) > 15:
                 chunks.append({"id": chunk_id, "text": current_chunk, "source": doc_name})
                 chunk_id += 1
     return chunks
@@ -65,7 +60,6 @@ def build_graph(chunks):
             words_i = set(chunks[i]["text"].lower().split())
             words_j = set(chunks[j]["text"].lower().split())
             common_words = words_i.intersection(words_j)
-            # Increased to 4 common words to ensure chunks are highly related
             if len(common_words) >= 4:
                 graph[i].append(j)
                 graph[j].append(i)
@@ -81,15 +75,20 @@ if 'graph' not in st.session_state:
 if 'system_ready' not in st.session_state:
     st.session_state.system_ready = False
 
-# --- SIDEBAR: PDF UPLOAD ---
+# --- SIDEBAR: API KEY & PDF UPLOAD ---
 with st.sidebar:
+    st.header("Configuration")
+    api_key = st.text_input("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, type="password")
+    
     st.header("Knowledge Base")
     uploaded_file = st.file_uploader("Upload your PDF document", type="pdf")
     
     if st.button("Build Graph RAG System"):
-        if uploaded_file is not None:
+        if not api_key:
+            st.error("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")
+        elif uploaded_file is not None:
             with st.spinner("Extracting text and building knowledge graph..."):
-                embedder, tokenizer, model = load_models()
+                embedder = load_models()
                 raw_text = extract_text_from_pdf(uploaded_file)
                 
                 if raw_text is None or len(raw_text.strip()) == 0:
@@ -109,8 +108,7 @@ with st.sidebar:
                         st.session_state.embeddings = new_embeddings
                         st.session_state.graph = new_graph
                         st.session_state.embedder = embedder
-                        st.session_state.tokenizer = tokenizer
-                        st.session_state.model = model
+                        st.session_state.api_key = api_key
                         st.session_state.system_ready = True
                         
                         st.success(f"Successfully processed {uploaded_file.name}! You can now ask questions.")
@@ -119,20 +117,20 @@ with st.sidebar:
 
 # --- MAIN APP LOGIC ---
 if not st.session_state.system_ready:
-    st.info("Please upload a PDF document in the sidebar and click 'Build Graph RAG System' to begin.")
+    st.info("Please enter your Groq API Key and upload a PDF in the sidebar to begin.")
 else:
     st.success("System is ready. Ask a question based on your uploaded document.")
     
     question = st.text_input("Enter your question:", placeholder="e.g., What is the main topic of the document?")
     
     if st.button("Get Answer") and question:
-        with st.spinner("Searching Graph & Generating Answer..."):
+        with st.spinner("Searching Graph & Generating Answer with Llama 3..."):
             # Step A: Vector Search
             q_embedding = st.session_state.embedder.encode([question])[0]
             similarities = np.dot(st.session_state.embeddings, q_embedding)
             best_chunk_id = np.argmax(similarities)
             
-            # Step B: Graph Traversal (Limiting to top 3 neighbors to avoid noise)
+            # Step B: Graph Traversal
             context_chunks = [st.session_state.chunks[best_chunk_id]["text"]]
             sources_used = [st.session_state.chunks[best_chunk_id]["source"]]
             
@@ -145,25 +143,38 @@ else:
             
             final_context = " ".join(context_chunks)
             
-            # Step C: Generate Answer using Flan-T5
-            prompt = f"Context: {final_context}\nQuestion: {question}\nAnswer:"
-            inputs = st.session_state.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
-            
-            with torch.no_grad():
-                outputs = st.session_state.model.generate(**inputs, max_new_tokens=50)
+            # Step C: Generate Answer using Groq (Llama 3)
+            try:
+                client = Groq(api_key=st.session_state.api_key)
                 
-            answer = st.session_state.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            
-            # Display Results
-            st.markdown("### Answer:")
-            if answer.strip():
+                prompt = f"Context: {final_context}\n\nQuestion: {question}\n\nAnswer the question based strictly on the context provided. If the answer is not in the context, say 'I cannot find the answer in the document.'"
+                
+                chat_completion = client.chat.completions.create(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a helpful assistant that answers questions strictly based on the provided context."
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    model="llama3-8b-8192",
+                )
+                
+                answer = chat_completion.choices[0].message.content
+                
+                # Display Results
+                st.markdown("### Answer:")
                 st.info(answer)
-            else:
-                st.warning("The model could not find a direct answer in the retrieved context. Try rephrasing your question.")
-            
-            st.markdown("### Sources Retrieved from Graph:")
-            for src in set(sources_used):
-                st.markdown(f"- `{src}`")
+                
+                st.markdown("### Sources Retrieved from Graph:")
+                for src in set(sources_used):
+                    st.markdown(f"- `{src}`")
+                    
+            except Exception as e:
+                st.error(f"Error generating answer: {e}")
 
 # Footer
 st.markdown("---")
