@@ -7,7 +7,7 @@ import pdfplumber
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Graph RAG QA", layout="centered")
 st.title("Multi-Document QA System")
-st.caption("Powered by Graph RAG (Retrieval Augmented Generation) with Llama 3")
+st.caption("Powered by Graph RAG (Retrieval Augmented Generation) with Llama 3.1")
 
 # --- LOAD MODELS ---
 @st.cache_resource
@@ -118,7 +118,7 @@ else:
     question = st.text_input("Enter your question:", placeholder="e.g., What is the main topic of the document?")
     
     if st.button("Get Answer") and question:
-        with st.spinner("Searching Graph & Generating Answer with Llama 3..."):
+        with st.spinner("Searching Graph & Generating Answer with Llama 3.1..."):
             # Step A: Vector Search
             q_embedding = st.session_state.embedder.encode([question])[0]
             similarities = np.dot(st.session_state.embeddings, q_embedding)
@@ -137,7 +137,7 @@ else:
             
             final_context = " ".join(context_chunks)
             
-            # Step C: Generate Answer using Groq (Llama 3) via Streamlit Secrets
+            # Step C: Generate Answer using Groq (Llama 3.1)
             try:
                 # This reads the key from the hidden Streamlit vault
                 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
@@ -155,7 +155,8 @@ else:
                             "content": prompt
                         }
                     ],
-                    model="llama3-8b-8192",
+                    # UPDATED MODEL NAME HERE
+                    model="llama-3.1-8b-instant",
                 )
                 
                 answer = chat_completion.choices[0].message.content
